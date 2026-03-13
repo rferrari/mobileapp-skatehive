@@ -256,7 +256,7 @@ export function LoginForm({
                 disabled={isLoading}
               >
                 <Text style={styles.loginButtonText}>
-                  Login
+                  {isLoading ? 'Logging in...' : 'Login'}
                 </Text>
               </Button>
 
@@ -275,7 +275,12 @@ export function LoginForm({
             <Text style={styles.secondaryButtonText}>Enter as Spectator</Text>
           </Pressable>
 
-          {/* "More info" moved to About screen as requested */}
+          <Pressable
+            onPress={() => WebBrowser.openBrowserAsync('https://docs.skatehive.app/docs/')}
+            style={styles.textLink}
+          >
+            <Text style={styles.textLinkText}>More info</Text>
+          </Pressable>
         </>
       )}
 
@@ -288,8 +293,11 @@ export function LoginForm({
         </Text>
       ) : null}
 
- 
-      {/* Suppressed "Authenticating..." text as requested */}
+      {isLoading && (
+        <View style={styles.loadingContainer}>
+          <Text style={styles.loadingText}>Authenticating...</Text>
+        </View>
+      )}
     </View>
   );
 }

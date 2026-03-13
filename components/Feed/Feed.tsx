@@ -8,13 +8,11 @@ import {
   Pressable,
 } from "react-native";
 import { useRouter } from "expo-router";
-import { useNavigation } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { Text } from "../ui/text";
 import { PostCard } from "./PostCard";
 import { ActivityIndicator } from "react-native";
 import { useAuth } from "~/lib/auth-provider";
-import { useFeedFilter } from "~/lib/FeedFilterContext";
 import { useSnaps } from "~/lib/hooks/useSnaps";
 import { theme } from "~/lib/theme";
 import {
@@ -23,9 +21,6 @@ import {
 } from "~/lib/ViewportTracker";
 import { BadgedIcon } from "../ui/BadgedIcon";
 import { useNotificationContext } from "~/lib/notifications-context";
-import { useScrollLock } from "~/lib/ScrollLockContext";
-import { ConversationDrawer } from "./ConversationDrawer";
-import { useScrollToTop } from "@react-navigation/native";
 import type { Discussion } from "@hiveio/dhive";
 
 interface FeedProps {
@@ -34,41 +29,12 @@ interface FeedProps {
 }
 
 function FeedContent({ refreshTrigger, onRefresh }: FeedProps) {
-  const { filter } = useFeedFilter();
-  const { isScrollLocked } = useScrollLock();
   const router = useRouter();
-  const { username, blockedList } = useAuth();
-  const { comments, isLoading, loadNextPage, hasMore, refresh } = useSnaps(filter, username);
+  const { username, mutedList, blacklistedList } = useAuth();
+  const { comments, isLoading, loadNextPage, hasMore, refresh } = useSnaps();
   const [isRefreshing, setIsRefreshing] = React.useState(false);
   const { updateVisibleItems } = useViewportTracker();
   const { badgeCount } = useNotificationContext();
-
-  const flatListRef = React.useRef<FlatList>(null);
-  const navigation = useNavigation();
-
-  React.useEffect(() => {
-    const unsubscribe = (navigation as any).addListener('tabPress', (e: any) => {
-      // Check if we are already focused on the feed
-      const isFocused = navigation.isFocused();
-      if (isFocused) {
-        // If already on feed, scroll to top
-        flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
-      }
-    });
-
-    return unsubscribe;
-  }, [navigation]);
-
-  // Conversation drawer state (lifted out of PostCard)
-  const [conversationPost, setConversationPost] = React.useState<Discussion | null>(null);
-
-  const handleOpenConversation = React.useCallback((post: Discussion) => {
-    setConversationPost(post);
-  }, []);
-
-  const handleCloseConversation = React.useCallback(() => {
-    setConversationPost(null);
-  }, []);
 
   // Handle pull-to-refresh
   const handleRefresh = React.useCallback(async () => {
@@ -104,7 +70,7 @@ function FeedContent({ refreshTrigger, onRefresh }: FeedProps) {
   // Map blockchain comments (Discussion) to Post for PostCard compatibility
   const feedData: Discussion[] = comments as unknown as Discussion[];
 
-  // Filter out posts from blocked users
+  // Filter out posts from muted and blacklisted users
   const filteredFeedData = React.useMemo(() => {
     if (!feedData || feedData.length === 0) return [];
 
@@ -112,13 +78,13 @@ function FeedContent({ refreshTrigger, onRefresh }: FeedProps) {
       // Don't filter out the user's own posts
       if (post.author === username) return true;
 
-      const authorLower = post.author.toLowerCase();
-      const blockedLowerList = blockedList.map((u) => u.toLowerCase());
-
-      // Filter out blocked users
-      return !blockedLowerList.includes(authorLower);
+      // Filter out muted and blacklisted users
+      return (
+        !mutedList.includes(post.author) &&
+        !blacklistedList.includes(post.author)
+      );
     });
-  }, [feedData, blockedList, username]);
+  }, [feedData, mutedList, blacklistedList, username]);
 
   const renderItem = React.useCallback(
     ({ item }: { item: Discussion }) => (
@@ -126,10 +92,9 @@ function FeedContent({ refreshTrigger, onRefresh }: FeedProps) {
         key={item.permlink}
         post={item}
         currentUsername={username || ""}
-        onOpenConversation={handleOpenConversation}
       />
     ),
-    [username, handleOpenConversation]
+    [username]
   );
 
   const keyExtractor = React.useCallback(
@@ -142,9 +107,36 @@ function FeedContent({ refreshTrigger, onRefresh }: FeedProps) {
     []
   );
 
+  const handleNotificationsPress = React.useCallback(() => {
+    router.push("/(tabs)/notifications");
+  }, [router]);
+
   const ListHeaderComponent = React.useCallback(
-    () => <View style={{ height: theme.spacing.md }} />,
-    []
+    () => (
+      <View style={styles.header}>
+        <Pressable style={styles.dropdownTrigger}>
+          <Text style={styles.headerText}>Recent</Text>
+          <Ionicons name="chevron-down" size={20} color={theme.colors.text} style={styles.chevron} />
+        </Pressable>
+        <Pressable
+          onPress={handleNotificationsPress}
+          style={styles.notificationButton}
+          accessibilityRole="button"
+          accessibilityLabel={
+            badgeCount > 0
+              ? `Notifications, ${badgeCount} unread`
+              : "Notifications"
+          }
+        >
+          <BadgedIcon
+            name="notifications-outline"
+            color={theme.colors.text}
+            badgeCount={badgeCount}
+          />
+        </Pressable>
+      </View>
+    ),
+    [handleNotificationsPress, badgeCount]
   );
 
   const ListFooterComponent = isLoading ? (
@@ -156,10 +148,8 @@ function FeedContent({ refreshTrigger, onRefresh }: FeedProps) {
   return (
     <View style={styles.container}>
       <FlatList
-        ref={flatListRef}
         data={filteredFeedData}
         showsVerticalScrollIndicator={false}
-        scrollEnabled={!isScrollLocked}
         renderItem={renderItem}
         keyExtractor={keyExtractor}
         ListHeaderComponent={ListHeaderComponent}
@@ -187,28 +177,39 @@ function FeedContent({ refreshTrigger, onRefresh }: FeedProps) {
         updateCellsBatchingPeriod={50}
         maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
       />
-
-      {/* Single shared conversation drawer */}
-      {conversationPost && (
-        <ConversationDrawer
-          isVisible={!!conversationPost}
-          onClose={handleCloseConversation}
-          post={conversationPost}
-        />
-      )}
     </View>
   );
 }
 
 export function Feed({ refreshTrigger, onRefresh }: FeedProps) {
   return (
-    <FeedContent refreshTrigger={refreshTrigger} onRefresh={onRefresh} />
+    <ViewportTrackerProvider>
+      <FeedContent refreshTrigger={refreshTrigger} onRefresh={onRefresh} />
+    </ViewportTrackerProvider>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.md,
+    paddingTop: theme.spacing.xxs,
+  },
+  headerText: {
+    fontSize: theme.fontSizes.xxl,
+    fontWeight: "bold",
+    color: theme.colors.text,
+    lineHeight: 40,
+    fontFamily: theme.fonts.bold,
+  },
+  notificationButton: {
+    padding: theme.spacing.xs,
   },
   dropdownTrigger: {
     flexDirection: 'row',
