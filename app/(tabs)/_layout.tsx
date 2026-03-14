@@ -146,6 +146,7 @@ export default function TabLayout() {
                 key={tab.name}
                 name={tab.name}
                 options={{
+                  unmountOnBlur: tab.name === 'videos' || tab.name === 'feed',
                   title: tab.title,
                   tabBarIcon: ({ color, focused }) =>
                     tab.isCenter ? (
@@ -169,7 +170,7 @@ export default function TabLayout() {
                       params: {},
                     },
                   }),
-                }}
+                } as any}
               />
             ))}
 
