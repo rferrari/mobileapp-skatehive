@@ -18,18 +18,24 @@ import { useAuth } from "~/lib/auth-provider";
 import { vote as hiveVote } from "~/lib/hive-utils";
 import { useToast } from "~/lib/toast-provider";
 import { useVideoFeed, type VideoPost } from "~/lib/hooks/useQueries";
+import { ConversationDrawer } from "~/components/Feed/ConversationDrawer";
+import { useScrollLock } from "~/lib/ScrollLockContext";
 import { theme } from "~/lib/theme";
+import { useAppSettings } from "~/lib/AppSettingsContext";
+import { LoadingScreen } from "~/components/ui/LoadingScreen";
 
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 
 const { height: WINDOW_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get("window");
 
 export default function VideosScreen() {
+  const { isScrollLocked } = useScrollLock();
   const router = useRouter();
   // Get tab bar height to calculate exact screen height for each video
   const tabBarHeight = 60; // Hardcoded fallback based on _layout.tsx
   const SCREEN_HEIGHT = WINDOW_HEIGHT - tabBarHeight;
   const { session, username } = useAuth();
+  const { settings } = useAppSettings();
   const { showToast } = useToast();
   const { data: videos = [], isLoading } = useVideoFeed();
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -39,6 +45,8 @@ export default function VideosScreen() {
     Record<string, number>
   >({});
   const [playingStates, setPlayingStates] = useState<Record<string, boolean>>({});
+  const [selectedVideo, setSelectedVideo] = useState<VideoPost | null>(null);
+  const [isCommentsVisible, setIsCommentsVisible] = useState(false);
   const flatListRef = useRef<FlatList>(null);
 
   // Initialize liked and vote count states when videos load
@@ -65,6 +73,24 @@ export default function VideosScreen() {
       setCurrentIndex(viewableItems[0].index || 0);
     }
   }).current;
+
+  // Prefetch thumbnails and avatars for upcoming videos (look-ahead cache)
+  useEffect(() => {
+    if (videos.length === 0) return;
+    const { Image: RNImage } = require('react-native');
+    // Prefetch assets for the next 3 videos ahead
+    for (let offset = 2; offset <= 4; offset++) {
+      const idx = currentIndex + offset;
+      if (idx < videos.length) {
+        const video = videos[idx];
+        if (video.thumbnailUrl) {
+          RNImage.prefetch(video.thumbnailUrl).catch(() => {});
+        }
+        RNImage.prefetch(`https://images.hive.blog/u/${video.username}/avatar`).catch(() => {});
+      }
+    }
+  }, [currentIndex, videos]);
+
 
   const viewabilityConfig = useRef({
     itemVisiblePercentThreshold: 50,
@@ -140,15 +166,10 @@ export default function VideosScreen() {
   // Handle comment button - navigate to conversation
   const handleComment = useCallback(
     (video: VideoPost) => {
-      router.push({
-        pathname: "/conversation",
-        params: {
-          author: video.author,
-          permlink: video.permlink,
-        },
-      });
+      setSelectedVideo(video);
+      setIsCommentsVisible(true);
     },
-    [router]
+    []
   );
 
   // Handle share button
@@ -252,8 +273,11 @@ export default function VideosScreen() {
           )}
         </View>
 
-        {/* Left side action buttons */}
-        <View style={styles.leftActions}>
+        {/* Side action buttons (Regular = left, Goofy = right) */}
+        <View style={[
+          styles.actionsContainer,
+          settings.stance === 'goofy' ? { left: 16 } : { right: 16 }
+        ]}>
           <Pressable
             style={styles.actionButton}
             onPress={() => handleVote(item)}
@@ -317,9 +341,7 @@ export default function VideosScreen() {
   if (isLoading) {
     return (
       <View style={styles.container}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={theme.colors.primary} />
-        </View>
+        <LoadingScreen />
       </View>
     );
   }
@@ -330,6 +352,7 @@ export default function VideosScreen() {
         <FlatList
           ref={flatListRef}
           data={videos}
+          scrollEnabled={!isScrollLocked}
           renderItem={renderVideo}
           keyExtractor={(item, index) => `${item.permlink}-${index}`}
           pagingEnabled
@@ -359,6 +382,16 @@ export default function VideosScreen() {
           />
           <Text style={styles.emptyText}>No videos found</Text>
         </View>
+      )}
+
+      {/* Unified Comment Drawer */}
+      {selectedVideo && (
+        <ConversationDrawer
+          isVisible={isCommentsVisible}
+          onClose={() => setIsCommentsVisible(false)}
+          author={selectedVideo.author}
+          permlink={selectedVideo.permlink}
+        />
       )}
     </View>
   );
@@ -504,12 +537,12 @@ const styles = StyleSheet.create({
     textShadowRadius: 3,
   },
   // Left side action buttons
-  leftActions: {
+  actionsContainer: {
     position: "absolute",
-    left: 16,
     bottom: 200,
     alignItems: "center",
     gap: 20,
+    zIndex: 10,
   },
   actionButton: {
     alignItems: "center",
