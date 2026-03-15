@@ -103,12 +103,17 @@ function countryToFlag(location: string): string {
     IN: '🇮🇳', INDIA: '🇮🇳',
     PH: '🇵🇭', PHILIPPINES: '🇵🇭',
   };
-  // Try exact match first, then check if location contains a known key
+  
+  // Try exact match first
   if (map[loc]) return map[loc];
+  
+  // Try finding a known country/code as a full word in the string
   for (const [key, flag] of Object.entries(map)) {
-    if (loc.includes(key)) return flag;
+    const regex = new RegExp(`\\b${key}\\b`, 'i');
+    if (regex.test(loc)) return flag;
   }
-  return '🌍';
+  
+  return '🌎';
 }
 
 export default function ProfileScreen() {
@@ -161,6 +166,7 @@ export default function ProfileScreen() {
       
       setIsFollowing(following);
     }
+    
     if (blockedList && profileUsername) {
       const profileLower = profileUsername.toLowerCase();
       const blocked = blockedList.some((u: string) => u.toLowerCase() === profileLower);
@@ -222,6 +228,7 @@ export default function ProfileScreen() {
       setIsBlockLoading(false);
     }
   };
+
   const { hiveAccount, isLoading: isLoadingProfile, error } = useHiveAccount(profileUsername);
   const {
     posts: userPosts,
@@ -457,7 +464,8 @@ export default function ProfileScreen() {
   }
 
   // Render the profile header section
-  const renderProfileHeader = () => (
+  const renderProfileHeader = () => {
+    return (
     <View>
       {/* Profile Section */}
       <View style={styles.profileSection}>
@@ -481,8 +489,7 @@ export default function ProfileScreen() {
                 </Pressable>
               )}
             </View>
-
-            {/* Username + Follow Button */}
+            {/* Username + Action Buttons */}
             <View style={styles.usernameRow}>
               <Text style={styles.username}>@{profileUsername}</Text>
               <View style={styles.headerActionsRaw}>
@@ -596,7 +603,8 @@ export default function ProfileScreen() {
         </View>
       )}
     </View>
-  );
+    );
+  };
 
   // Render individual post item
   const renderPostItem = ({ item }: { item: any }) => (
@@ -756,6 +764,17 @@ export default function ProfileScreen() {
               style={styles.dialogItem}
               onPress={() => {
                 setSettingsMenuVisible(false);
+                handleMutedPress();
+              }}
+            >
+              <Ionicons name="volume-mute-outline" size={20} color={theme.colors.muted} />
+              <Text style={styles.dialogItemText}>Muted Users</Text>
+            </Pressable>
+            <View style={styles.dialogDivider} />
+            <Pressable
+              style={styles.dialogItem}
+              onPress={() => {
+                setSettingsMenuVisible(false);
                 handleLogout();
               }}
             >
@@ -852,16 +871,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: theme.spacing.md,
   },
-  headerActionsRaw: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.sm,
-  },
-  mutedActionBtn: {
-    backgroundColor: 'transparent',
-    borderColor: theme.colors.danger,
-    borderWidth: 1,
-  },
   followActionBtn: {
     paddingHorizontal: theme.spacing.md,
     paddingVertical: theme.spacing.xxs,
@@ -888,6 +897,20 @@ const styles = StyleSheet.create({
   },
   unfollowBtnText: {
     color: theme.colors.text,
+  },
+  mutedActionBtn: {
+    backgroundColor: 'rgba(255, 68, 68, 0.1)',
+    borderColor: theme.colors.danger,
+    minWidth: 40,
+  },
+  unmuteActionBtn: {
+    backgroundColor: 'transparent',
+    borderColor: theme.colors.border,
+    minWidth: 40,
+  },
+  headerActionsRaw: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   statsRow: {
     flexDirection: 'row',
