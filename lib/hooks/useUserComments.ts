@@ -130,7 +130,12 @@ export function useUserComments(username: string | null, blockedList: string[] =
             !blockedLower.includes(p.author.toLowerCase())
           );
 
-          if (uniquePosts.length === 0) {
+          if (uniquePosts.length === 0 && newPosts.length > 0) {
+            // All new posts were filtered out by mutes, try to get more
+            setFetchTrigger(t => t + 1);
+          }
+
+          if (uniquePosts.length === 0 && newPosts.length === 0) {
             setHasMore(false);
           }
 

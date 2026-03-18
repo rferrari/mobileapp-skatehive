@@ -12,8 +12,9 @@ import { router } from 'expo-router';
 import { FontAwesome } from '@expo/vector-icons';
 import { Text } from '../ui/text';
 import { theme } from '~/lib/theme';
-import { getFollowing, getFollowers, getUserRelationshipList, setUserRelationship } from '~/lib/hive-utils';
+import { getFollowing, getFollowers, setUserRelationship } from '~/lib/hive-utils';
 import { useAuth } from '~/lib/auth-provider';
+import { getMutedList, getBlacklistedList } from '~/lib/api';
 
 interface FollowersModalProps {
   visible: boolean;
@@ -102,8 +103,8 @@ export const FollowersModal: React.FC<FollowersModalProps> = ({
         } else {
           // Fallback to API for other users
           const [muted, blacklisted] = await Promise.all([
-            getUserRelationshipList(username, 'ignore'),
-            getUserRelationshipList(username, 'blacklist')
+            getMutedList(username),
+            getBlacklistedList(username)
           ]);
           newUsers = Array.from(new Set([...muted, ...blacklisted]));
         }
@@ -119,8 +120,10 @@ export const FollowersModal: React.FC<FollowersModalProps> = ({
         setUsers(newUsers);
       }
 
-      // If we got less than 50, we've reached the end
-      setHasMore(newUsers.length === 50);
+      // If we got fewer results than the page size, we've reached the end
+      if (type === 'followers' || type === 'following') {
+        setHasMore(newUsers.length === 50);
+      }
     } catch (error) {
       console.error(`Error loading ${type}:`, error);
     } finally {

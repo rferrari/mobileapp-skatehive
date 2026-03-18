@@ -1,6 +1,15 @@
 import {
   API_BASE_URL,
 } from './constants';
+import {
+  fetchFollowingFromAPI,
+  fetchFollowingFromRPC,
+  fetchFollowersFromAPI,
+  fetchFollowersFromRPC,
+  fetchMutedFromAPI,
+  fetchBlacklistedFromAPI,
+  resilientFetch
+} from './resilient-fetch';
 import { getUserRelationshipList } from './hive-utils';
 import type { Post } from './types';
 
@@ -91,26 +100,43 @@ export async function getRewards(username: string) {
  * Fetches user's following list (usernames) from Skatehive API
  */
 export async function getFollowingList(username: string): Promise<string[]> {
-  try {
-    const response = await fetch(`${API_BASE_URL}/relationships/${username}/following`);
-    const data: ApiResponse<string[]> = await response.json();
-    if (data.success && Array.isArray(data.data)) return data.data;
-  } catch (error) {
-    console.warn('[Relationships] API failed for following, falling back to RPC:', error);
-  }
-  return getUserRelationshipList(username, 'blog');
+  return resilientFetch(
+    () => fetchFollowingFromAPI(username),
+    () => fetchFollowingFromRPC(username),
+    'Relationships'
+  );
 }
 
 /**
  * Fetches user's followers list (usernames) from Skatehive API
  */
 export async function getFollowersList(username: string): Promise<string[]> {
-  try {
-    const response = await fetch(`${API_BASE_URL}/relationships/${username}/followers`);
-    const data: ApiResponse<string[]> = await response.json();
-    if (data.success && Array.isArray(data.data)) return data.data;
-  } catch (error) {
-    console.warn('[Relationships] API failed for followers, falling back to RPC:', error);
-  }
-  return getUserRelationshipList(username, 'blog');
+  return resilientFetch(
+    () => fetchFollowersFromAPI(username),
+    () => fetchFollowersFromRPC(username),
+    'Relationships'
+  );
+}
+
+/**
+ * Fetches user's muted list (usernames) from Skatehive API with fallback to bridge API
+ */
+export async function getMutedList(username: string): Promise<string[]> {
+  return resilientFetch(
+    () => fetchMutedFromAPI(username),
+    () => getUserRelationshipList(username, 'ignore'),
+    'Muted'
+  );
+}
+
+/**
+ * Fetches user's blacklisted list (usernames) from Skatehive API
+ * Note: No RPC fallback since bridge.get_following doesn't support 'blacklist'
+ */
+export async function getBlacklistedList(username: string): Promise<string[]> {
+  return resilientFetch(
+    () => fetchBlacklistedFromAPI(username),
+    () => Promise.resolve([]),
+    'Blacklisted'
+  );
 }

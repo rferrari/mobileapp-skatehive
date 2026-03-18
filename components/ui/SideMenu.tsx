@@ -440,12 +440,14 @@ export function SideMenu({ isVisible, onClose }: SideMenuProps) {
         }}
       />
 
-      <FollowersModal
-        visible={isBlockedModalVisible}
-        onClose={() => setIsBlockedModalVisible(false)}
-        username={username || ''}
-        type="blocked"
-      />
+      {username && (
+        <FollowersModal
+          visible={isBlockedModalVisible}
+          onClose={() => setIsBlockedModalVisible(false)}
+          username={username}
+          type="blocked"
+        />
+      )}
     </View>
   );
 }

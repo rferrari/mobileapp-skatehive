@@ -9,7 +9,10 @@ import {
   Image,
   Pressable,
   Share,
+  Animated,
 } from "react-native";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -20,24 +23,31 @@ import { useToast } from "~/lib/toast-provider";
 import { useVideoFeed, type VideoPost } from "~/lib/hooks/useQueries";
 import { ConversationDrawer } from "~/components/Feed/ConversationDrawer";
 import { useScrollLock } from "~/lib/ScrollLockContext";
+import { useScrollDirection } from "~/lib/ScrollDirectionContext";
 import { theme } from "~/lib/theme";
 import { useAppSettings } from "~/lib/AppSettingsContext";
 import { LoadingScreen } from "~/components/ui/LoadingScreen";
+import { MatrixRain } from "~/components/ui/loading-effects/MatrixRain";
 
-import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 
 const { height: WINDOW_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get("window");
 
 export default function VideosScreen() {
   const { isScrollLocked } = useScrollLock();
   const router = useRouter();
-  // Get tab bar height to calculate exact screen height for each video
-  const tabBarHeight = 60; // Hardcoded fallback based on _layout.tsx
-  const SCREEN_HEIGHT = WINDOW_HEIGHT - tabBarHeight;
+  const SCREEN_HEIGHT = WINDOW_HEIGHT;
   const { session, username } = useAuth();
   const { settings } = useAppSettings();
   const { showToast } = useToast();
-  const { data: videos = [], isLoading } = useVideoFeed();
+  const {
+    data: videos = [],
+    isLoading,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    refetch,
+    isError
+  } = useVideoFeed();
   const [currentIndex, setCurrentIndex] = useState(0);
   const [votingStates, setVotingStates] = useState<Record<string, boolean>>({});
   const [likedStates, setLikedStates] = useState<Record<string, boolean>>({});
@@ -48,10 +58,99 @@ export default function VideosScreen() {
   const [selectedVideo, setSelectedVideo] = useState<VideoPost | null>(null);
   const [isCommentsVisible, setIsCommentsVisible] = useState(false);
   const flatListRef = useRef<FlatList>(null);
+  const { setScrollDirection } = useScrollDirection();
+  const lastVideoScrollY = useRef(0);
+  const [isMuted, setIsMuted] = useState(true);
+  const [showTutorial, setShowTutorial] = useState(false);
+  const swipeTranslateX = useRef(new Animated.Value(0)).current;
+  const lastTapTime = useRef(0);
+  const uiOpacity = useRef(new Animated.Value(1)).current;
+  const uiFadeTimeout = useRef<any>(null);
+
+  const resetUiFade = useCallback(() => {
+    // Cancel existing timeout
+    if (uiFadeTimeout.current) {
+      clearTimeout(uiFadeTimeout.current);
+    }
+    
+    // Reset opacity to 100% instantly
+    uiOpacity.setValue(1);
+    
+    // Start 1s timeout to fade to 50%
+    uiFadeTimeout.current = setTimeout(() => {
+      Animated.timing(uiOpacity, {
+        toValue: 0.5,
+        duration: 800,
+        useNativeDriver: true,
+      }).start();
+    }, 1000);
+  }, []);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (uiFadeTimeout.current) clearTimeout(uiFadeTimeout.current);
+    };
+  }, []);
+
+  // Check if user has seen tutorial on mount
+  useEffect(() => {
+    const checkTutorial = async () => {
+      try {
+        const seen = await AsyncStorage.getItem('hasSeenVideoTutorial_v2');
+        if (!seen) {
+          setShowTutorial(true);
+        }
+      } catch (e) {
+        // Fallback
+      }
+    };
+    checkTutorial();
+  }, []);
+
+  const dismissTutorial = async () => {
+    setShowTutorial(false);
+    try {
+      await AsyncStorage.setItem('hasSeenVideoTutorial_v2', 'true');
+    } catch (e) {}
+  };
+
+  const panGesture = Gesture.Pan()
+    .activeOffsetX([-30, 30])
+    .failOffsetY([-15, 15])
+    .runOnJS(true)
+    .onUpdate((event) => {
+      swipeTranslateX.setValue(event.translationX);
+    })
+    .onEnd((event) => {
+      const { translationX, velocityX } = event;
+      // Fast flick OR long swipe triggers navigation
+      if (translationX < -80 || velocityX < -600) {
+        Animated.timing(swipeTranslateX, {
+          toValue: -SCREEN_WIDTH,
+          duration: 200,
+          useNativeDriver: true,
+        }).start(() => {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+          router.push('/(tabs)/feed');
+          // Reset after a short delay to ensure navigation transition finishes
+          setTimeout(() => {
+            swipeTranslateX.setValue(0);
+          }, 300);
+        });
+      } else {
+        Animated.spring(swipeTranslateX, {
+          toValue: 0,
+          useNativeDriver: true,
+          tension: 40,
+          friction: 7,
+        }).start();
+      }
+    });
 
   // Initialize liked and vote count states when videos load
   useEffect(() => {
-    if (videos.length === 0) return;
+    if (!videos || videos.length === 0) return;
     const initialLiked: Record<string, boolean> = {};
     const initialVoteCounts: Record<string, number> = {};
     videos.forEach((video) => {
@@ -71,12 +170,13 @@ export default function VideosScreen() {
   const onViewableItemsChanged = useRef(({ viewableItems }: any) => {
     if (viewableItems.length > 0) {
       setCurrentIndex(viewableItems[0].index || 0);
+      resetUiFade(); // Show UI when scrolling
     }
   }).current;
 
   // Prefetch thumbnails and avatars for upcoming videos (look-ahead cache)
   useEffect(() => {
-    if (videos.length === 0) return;
+    if (!videos || videos.length === 0) return;
     const { Image: RNImage } = require('react-native');
     // Prefetch assets for the next 3 videos ahead
     for (let offset = 2; offset <= 4; offset++) {
@@ -84,9 +184,9 @@ export default function VideosScreen() {
       if (idx < videos.length) {
         const video = videos[idx];
         if (video.thumbnailUrl) {
-          RNImage.prefetch(video.thumbnailUrl).catch(() => {});
+          RNImage.prefetch(video.thumbnailUrl).catch(() => { });
         }
-        RNImage.prefetch(`https://images.hive.blog/u/${video.username}/avatar`).catch(() => {});
+        RNImage.prefetch(`https://images.hive.blog/u/${video.username}/avatar`).catch(() => { });
       }
     }
   }, [currentIndex, videos]);
@@ -164,13 +264,11 @@ export default function VideosScreen() {
   );
 
   // Handle comment button - navigate to conversation
-  const handleComment = useCallback(
-    (video: VideoPost) => {
-      setSelectedVideo(video);
-      setIsCommentsVisible(true);
-    },
-    []
-  );
+  const handleEndReached = useCallback(() => {
+    if (hasNextPage && !isFetchingNextPage) {
+      fetchNextPage();
+    }
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   // Handle share button
   const handleShare = useCallback(async (video: VideoPost) => {
@@ -186,6 +284,14 @@ export default function VideosScreen() {
       // User cancelled or error
     }
   }, []);
+
+  const handleComment = useCallback(
+    (video: VideoPost) => {
+      setSelectedVideo(video);
+      setIsCommentsVisible(true);
+    },
+    []
+  );
 
   const renderVideo = ({ item, index }: { item: VideoPost; index: number }) => {
     const isActive = index === currentIndex;
@@ -208,8 +314,31 @@ export default function VideosScreen() {
 
     const isVideoPlaying = playingStates[key] ?? false;
 
+    const handleTap = () => {
+      const now = Date.now();
+      const DOUBLE_TAP_DELAY = 300;
+      
+      if (now - lastTapTime.current < DOUBLE_TAP_DELAY) {
+        // Double tap
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      } else {
+        // Single tap
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      }
+      
+      setIsMuted(prev => !prev);
+      setScrollDirection('up'); // Show bars
+      resetUiFade(); // Wake up UI
+      lastTapTime.current = now;
+    };
+
     return (
-      <View style={[styles.videoContainer, { height: SCREEN_HEIGHT }]}>
+      <View 
+        style={[
+          styles.videoContainer, 
+          { height: SCREEN_HEIGHT }
+        ]}
+      >
         {/* Thumbnail shown behind video — visible while video buffers */}
         {item.thumbnailUrl && (
           <Image
@@ -220,24 +349,34 @@ export default function VideosScreen() {
           />
         )}
 
-        {/* Only mount VideoPlayer for current and adjacent items */}
-        {isNearby ? (
-          <VideoPlayer
-            url={item.videoUrl}
-            playing={isActive}
-            contentFit="cover"
-            showControls={false}
-            onPlaybackStarted={() => {
-              setPlayingStates((prev) => ({ ...prev, [key]: true }));
-            }}
-          />
-        ) : (
-          <View style={styles.thumbnailPlaceholder}>
-            {!item.thumbnailUrl && (
-              <Ionicons name="play-circle-outline" size={64} color="rgba(255,255,255,0.5)" />
-            )}
-          </View>
-        )}
+        {/* Tap to toggle mute + reveal bars */}
+        <Pressable
+          style={StyleSheet.absoluteFill}
+          onPress={handleTap}
+        >
+          {/* Only mount VideoPlayer for current and adjacent items */}
+          {isNearby ? (
+            <VideoPlayer
+              url={item.videoUrl}
+              playing={isActive}
+              contentFit="cover"
+              showControls={false}
+              showMuteButton={true}
+              muted={isMuted}
+              onMuteToggle={setIsMuted}
+              onPlaybackStarted={() => {
+                setPlayingStates((prev) => ({ ...prev, [key]: true }));
+              }}
+            />
+          ) : (
+            <View style={styles.thumbnailPlaceholder}>
+              {!item.thumbnailUrl && (
+                <Ionicons name="play-circle-outline" size={64} color="rgba(255,255,255,0.5)" />
+              )}
+            </View>
+          )}
+        </Pressable>
+
 
         {/* Loading indicator — only while video is actively buffering */}
         {isActive && !isVideoPlaying && (
@@ -247,17 +386,23 @@ export default function VideosScreen() {
         )}
 
         {/* Top header with user info */}
-        <View style={styles.topHeader}>
+        <Animated.View style={[styles.topHeader, { opacity: uiOpacity }]}>
           <Pressable style={styles.userInfo} onPress={handleUserPress}>
-            <Image source={{ uri: avatarUrl }} style={styles.avatar} fadeDuration={0} />
-            <Text style={styles.username}>@{item.username}</Text>
+            <Image 
+              source={{ uri: item.soft_post_avatar || avatarUrl }} 
+              style={styles.avatar} 
+              fadeDuration={0} 
+            />
+            <Text style={styles.username}>
+              {item.soft_post_display_name ? item.soft_post_display_name : `@${item.username}`}
+            </Text>
           </Pressable>
 
           <View style={styles.headerSpacer} />
-        </View>
+        </Animated.View>
 
         {/* Bottom info overlay */}
-        <View style={styles.bottomOverlay}>
+        <Animated.View style={[styles.bottomOverlay, { opacity: uiOpacity }]}>
           {/* Title if available */}
           {item.title ? (
             <Text style={styles.titleText} numberOfLines={2}>
@@ -271,12 +416,13 @@ export default function VideosScreen() {
               #{item.tags.slice(0, 3).join(" #")}
             </Text>
           )}
-        </View>
+        </Animated.View>
 
         {/* Side action buttons (Regular = left, Goofy = right) */}
-        <View style={[
+        <Animated.View style={[
           styles.actionsContainer,
-          settings.stance === 'goofy' ? { left: 16 } : { right: 16 }
+          settings.stance === 'goofy' ? { left: 16 } : { right: 16 },
+          { opacity: uiOpacity }
         ]}>
           <Pressable
             style={styles.actionButton}
@@ -333,7 +479,7 @@ export default function VideosScreen() {
               </Text>
             </View>
           ) : null}
-        </View>
+        </Animated.View>
       </View>
     );
   };
@@ -346,54 +492,132 @@ export default function VideosScreen() {
     );
   }
 
-  return (
-    <View style={styles.container}>
-      {videos.length > 0 ? (
-        <FlatList
-          ref={flatListRef}
-          data={videos}
-          scrollEnabled={!isScrollLocked}
-          renderItem={renderVideo}
-          keyExtractor={(item, index) => `${item.permlink}-${index}`}
-          pagingEnabled
-          showsVerticalScrollIndicator={false}
-          snapToAlignment="start"
-          snapToInterval={SCREEN_HEIGHT}
-          decelerationRate="fast"
-          onViewableItemsChanged={onViewableItemsChanged}
-          viewabilityConfig={viewabilityConfig}
-          removeClippedSubviews={true} // Re-enabled to help with memory/OOM crashes
-          maxToRenderPerBatch={3}
-          windowSize={5}
-          initialNumToRender={2}
-          initialScrollIndex={0}
-          getItemLayout={(_, index) => ({
-            length: SCREEN_HEIGHT,
-            offset: SCREEN_HEIGHT * index,
-            index,
-          })}
-        />
-      ) : (
-        <View style={styles.emptyContainer}>
-          <Ionicons
-            name="videocam-off-outline"
-            size={64}
-            color={theme.colors.gray}
-          />
-          <Text style={styles.emptyText}>No videos found</Text>
-        </View>
-      )}
+  if (isError) {
+    return (
+      <View style={styles.errorContainer}>
+        <Ionicons name="alert-circle-outline" size={64} color={theme.colors.danger || "#ff4444"} />
+        <Text style={styles.errorText}>Failed to load bangers</Text>
+        <Pressable style={styles.retryButton} onPress={() => refetch()}>
+          <Text style={styles.retryText}>Retry</Text>
+        </Pressable>
+      </View>
+    );
+  }
 
-      {/* Unified Comment Drawer */}
-      {selectedVideo && (
-        <ConversationDrawer
-          isVisible={isCommentsVisible}
-          onClose={() => setIsCommentsVisible(false)}
-          author={selectedVideo.author}
-          permlink={selectedVideo.permlink}
-        />
-      )}
-    </View>
+  return (
+    <GestureDetector gesture={panGesture}>
+      <Animated.View 
+        style={[styles.container, { transform: [{ translateX: swipeTranslateX }] }]}
+      >
+        {videos.length > 0 ? (
+          <FlatList
+            ref={flatListRef}
+            data={videos}
+            scrollEnabled={!isScrollLocked}
+            renderItem={renderVideo}
+            keyExtractor={(item, index) => `${item.permlink}-${index}`}
+            pagingEnabled
+            showsVerticalScrollIndicator={false}
+            snapToAlignment="start"
+            snapToInterval={SCREEN_HEIGHT}
+            decelerationRate="fast"
+            disableIntervalMomentum={true} // Forces one-at-a-time scrolling
+            onViewableItemsChanged={onViewableItemsChanged}
+            viewabilityConfig={viewabilityConfig}
+            onEndReached={handleEndReached}
+            onEndReachedThreshold={0.5}
+            onScroll={(e) => {
+              const currentY = e.nativeEvent.contentOffset.y;
+              if (currentY > lastVideoScrollY.current + 20) {
+                setScrollDirection('down');
+              } else if (currentY < lastVideoScrollY.current - 20) {
+                setScrollDirection('up');
+              }
+              lastVideoScrollY.current = currentY;
+            }}
+            scrollEventThrottle={16}
+            removeClippedSubviews={true}
+            maxToRenderPerBatch={3}
+            windowSize={5}
+            initialNumToRender={2}
+            initialScrollIndex={0}
+            getItemLayout={(_, index) => ({
+              length: SCREEN_HEIGHT,
+              offset: SCREEN_HEIGHT * index,
+              index,
+            })}
+            ListFooterComponent={
+              isFetchingNextPage ? (
+                <View style={[styles.loadingFooter, { height: SCREEN_HEIGHT }]}>
+                  <MatrixRain opacity={0.3} />
+                  <ActivityIndicator size="small" color={theme.colors.primary} />
+                  <Text style={styles.loadingText}>Loading more bangers...</Text>
+                </View>
+              ) : null
+            }
+          />
+        ) : (
+          <View style={styles.emptyContainer}>
+            <Ionicons
+              name="videocam-off-outline"
+              size={64}
+              color={theme.colors.gray}
+            />
+            <Text style={styles.emptyText}>No videos found</Text>
+          </View>
+        )}
+
+        {/* Unified Comment Drawer */}
+        {selectedVideo && (
+          <ConversationDrawer
+            isVisible={isCommentsVisible}
+            onClose={() => setIsCommentsVisible(false)}
+            author={selectedVideo.author}
+            permlink={selectedVideo.permlink}
+          />
+        )}
+
+        {/* Tutorial Overlay */}
+        {showTutorial && (
+          <View style={styles.tutorialOverlay}>
+            <View style={styles.tutorialContent}>
+              <Text style={styles.tutorialTitle}>Quick Tips</Text>
+              
+              <View style={styles.tutorialItem}>
+                <View style={styles.tutorialIconWrapper}>
+                  <Ionicons name="hand-right-outline" size={32} color={theme.colors.primary} />
+                  <View style={styles.touchCircle} />
+                </View>
+                <View style={styles.tutorialTextWrapper}>
+                  <Text style={styles.tutorialHeader}>Tap or Double Tap</Text>
+                  <Text style={styles.tutorialSub}>Toggle audio & show controls</Text>
+                </View>
+              </View>
+
+              <View style={styles.tutorialItem}>
+                <View style={styles.tutorialIconWrapper}>
+                  <Ionicons name="swap-horizontal-outline" size={32} color={theme.colors.primary} />
+                  <View style={[styles.swipeArrow, { left: 40 }]}>
+                    <Ionicons name="chevron-back-outline" size={20} color={theme.colors.primary} />
+                  </View>
+                </View>
+                <View style={styles.tutorialTextWrapper}>
+                  <Text style={styles.tutorialHeader}>Swipe Left from Anywhere</Text>
+                  <Text style={styles.tutorialSub}>Go back to Feed page</Text>
+                </View>
+              </View>
+
+              <Pressable 
+                style={styles.tutorialButton}
+                onPress={dismissTutorial}
+              >
+                <Text style={styles.tutorialButtonText}>Let's Rip! 🛹</Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
+      </Animated.View>
+    </GestureDetector>
   );
 }
 
@@ -476,7 +700,7 @@ const styles = StyleSheet.create({
   // Bottom overlay styles
   bottomOverlay: {
     position: "absolute",
-    bottom: 120,
+    bottom: 80,
     left: 16,
     right: 80,
   },
@@ -539,7 +763,7 @@ const styles = StyleSheet.create({
   // Left side action buttons
   actionsContainer: {
     position: "absolute",
-    bottom: 200,
+    bottom: 140,
     alignItems: "center",
     gap: 20,
     zIndex: 10,
@@ -575,5 +799,114 @@ const styles = StyleSheet.create({
   emptyText: {
     color: theme.colors.gray,
     fontSize: 16,
+  },
+  loadingFooter: {
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#000",
+  },
+  loadingText: {
+    color: theme.colors.primary,
+    marginTop: 10,
+    fontFamily: theme.fonts.bold,
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#000",
+    gap: 16,
+  },
+  errorText: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "600",
+  },
+  retryButton: {
+    backgroundColor: theme.colors.primary,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 25,
+  },
+  retryText: {
+    color: "#000",
+    fontWeight: "700",
+  },
+  edgeHint: {
+    display: 'none', // Removed in favor of red swipe zone
+  },
+
+  tutorialOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000,
+  },
+  tutorialContent: {
+    width: '85%',
+    backgroundColor: '#111',
+    borderRadius: 24,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    alignItems: 'center',
+  },
+  tutorialTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#fff',
+    marginBottom: 32,
+  },
+  tutorialItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 32,
+    width: '100%',
+  },
+  tutorialIconWrapper: {
+    width: 60,
+    height: 60,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 16,
+  },
+  tutorialTextWrapper: {
+    flex: 1,
+  },
+  tutorialHeader: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: theme.colors.primary,
+    marginBottom: 4,
+  },
+  tutorialSub: {
+    fontSize: 14,
+    color: 'rgba(255,255,255,0.6)',
+  },
+  touchCircle: {
+    position: 'absolute',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: theme.colors.primary,
+    opacity: 0.5,
+  },
+  swipeArrow: {
+    position: 'absolute',
+    top: 20,
+  },
+  tutorialButton: {
+    backgroundColor: theme.colors.primary,
+    paddingVertical: 14,
+    paddingHorizontal: 32,
+    borderRadius: 30,
+    marginTop: 16,
+  },
+  tutorialButtonText: {
+    color: '#000',
+    fontSize: 18,
+    fontWeight: 'bold',
   },
 });
