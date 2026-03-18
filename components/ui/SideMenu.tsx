@@ -428,6 +428,7 @@ const styles = StyleSheet.create({
     zIndex: 101,
     borderRightWidth: 1,
     borderRightColor: theme.colors.border,
+    overflow: "hidden",
   },
   safeArea: {
     flex: 1,
