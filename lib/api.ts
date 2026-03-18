@@ -1,4 +1,7 @@
-import { API_BASE_URL } from './constants';
+import {
+  API_BASE_URL,
+} from './constants';
+import { getUserRelationshipList } from './hive-utils';
 import type { Post } from './types';
 
 interface ApiResponse<T> {
@@ -82,4 +85,32 @@ export async function getRewards(username: string) {
     console.error('Error fetching rewards:', error);
     return null;
   }
+}
+
+/**
+ * Fetches user's following list (usernames) from Skatehive API
+ */
+export async function getFollowingList(username: string): Promise<string[]> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/relationships/${username}/following`);
+    const data: ApiResponse<string[]> = await response.json();
+    if (data.success && Array.isArray(data.data)) return data.data;
+  } catch (error) {
+    console.warn('[Relationships] API failed for following, falling back to RPC:', error);
+  }
+  return getUserRelationshipList(username, 'blog');
+}
+
+/**
+ * Fetches user's followers list (usernames) from Skatehive API
+ */
+export async function getFollowersList(username: string): Promise<string[]> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/relationships/${username}/followers`);
+    const data: ApiResponse<string[]> = await response.json();
+    if (data.success && Array.isArray(data.data)) return data.data;
+  } catch (error) {
+    console.warn('[Relationships] API failed for followers, falling back to RPC:', error);
+  }
+  return getUserRelationshipList(username, 'blog');
 }

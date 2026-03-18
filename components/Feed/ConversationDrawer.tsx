@@ -49,7 +49,6 @@ export function ConversationDrawer({
   
   const [post, setPost] = useState<Discussion | undefined>(initialPost);
   const [isPostLoading, setIsPostLoading] = useState(false);
-  const [scrollOffset, setScrollOffset] = useState(0);
 
   const author = post?.author || initialAuthor || '';
   const permlink = post?.permlink || initialPermlink || '';
@@ -106,14 +105,10 @@ export function ConversationDrawer({
 
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: (evt, gestureState) => {
-        // Immediately start if touching the top part (header/handle)
-        return evt.nativeEvent.locationY < 100;
-      },
-      onMoveShouldSetPanResponder: () => false,
-      onMoveShouldSetPanResponderCapture: (_, gestureState) => {
-        // Capture the gesture if swiping down at the top of the scroll
-        return gestureState.dy > 10 && scrollOffset <= 0;
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, gestureState) => {
+        // Only respond to downward swipes when at the top of the scroll
+        return gestureState.dy > 10;
       },
       onPanResponderMove: (_, gestureState) => {
         if (gestureState.dy > 0) {
@@ -153,7 +148,6 @@ export function ConversationDrawer({
         <Pressable style={styles.backdrop} onPress={handleClose} />
         
         <Animated.View
-          {...panResponder.panHandlers}
           style={[
             styles.drawer,
             {
@@ -163,7 +157,7 @@ export function ConversationDrawer({
           ]}
         >
           {/* Gesture Sensitive Header Area */}
-          <View>
+          <View {...panResponder.panHandlers}>
             {/* Handle bar for swiping */}
             <View style={styles.handleBarContainer}>
               <View style={styles.handleBar} />
@@ -205,8 +199,6 @@ export function ConversationDrawer({
               contentContainerStyle={styles.scrollContent}
               showsVerticalScrollIndicator={false}
               scrollEnabled={!isScrollLocked}
-              onScroll={(e) => setScrollOffset(e.nativeEvent.contentOffset.y)}
-              scrollEventThrottle={16}
             >
               <View style={styles.repliesHeader}>
                 <Text style={styles.repliesTitle}>
@@ -326,7 +318,6 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    flexGrow: 1, // Ensure it fills space for gestures
     paddingBottom: 100, // Space for composer
   },
   repliesHeader: {
@@ -373,15 +364,11 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   emptyContainer: {
-    flex: 1,
     padding: 48,
     alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 200,
   },
   emptyText: {
     color: theme.colors.muted,
     fontSize: 16,
-    textAlign: 'center',
   },
 });
