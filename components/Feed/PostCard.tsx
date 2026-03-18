@@ -8,16 +8,16 @@ import { router } from 'expo-router';
 // import { API_BASE_URL } from '~/lib/constants';
 import { vote as hiveVote, submitEncryptedReport } from '~/lib/hive-utils';
 import { useAuth } from '~/lib/auth-provider';
+import { useAppSettings } from '~/lib/AppSettingsContext';
 import { useScrollLock } from '~/lib/ScrollLockContext';
 import { useVoteValue } from '~/lib/hooks/useVoteValue';
 import { useViewportTracker } from '~/lib/ViewportTracker';
 import { Text } from '../ui/text';
 import { VotingSlider } from '../ui/VotingSlider';
-import { VotePresetButtons } from '../ui/VotePresetButtons';
-import { useAppSettings } from '~/lib/AppSettingsContext';
 import { MediaPreview } from './MediaPreview';
 import { CommentBottomSheet } from '../ui/CommentBottomSheet';
 import { EnhancedMarkdownRenderer } from '../markdown/EnhancedMarkdownRenderer';
+// PostCard → ConversationDrawer → PostCard
 const ConversationDrawer = React.lazy(() =>
   import('./ConversationDrawer').then(m => ({ default: m.ConversationDrawer }))
 );
@@ -53,12 +53,10 @@ const formatTimeAbbreviated = (date: Date): string => {
 interface PostCardProps {
   post: Discussion;
   currentUsername: string | null;
-  isStatic?: boolean;
-  onOpenConversation?: (post: Discussion) => void;
 }
 
 
-export const PostCard = React.memo(({ post, currentUsername, isStatic, onOpenConversation }: PostCardProps) => {
+export const PostCard = React.memo(({ post, currentUsername }: PostCardProps) => {
   const { isScrollLocked, setScrollLocked } = useScrollLock();
   const { session, followingList, updateUserRelationship } = useAuth();
   const { settings } = useAppSettings();
@@ -71,7 +69,8 @@ export const PostCard = React.memo(({ post, currentUsername, isStatic, onOpenCon
   const [showSlider, setShowSlider] = useState(false);
   const [voteWeight, setVoteWeight] = useState(100);
   const [isLiked, setIsLiked] = useState(false);
-  const [isDrawerVisible, setIsDrawerVisible] = useState(false);
+  const [isCommentSheetVisible, setIsCommentSheetVisible] = useState(false);
+  const [isFullConversationVisible, setIsFullConversationVisible] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showReportModal, setShowReportModal] = useState(false);
   const [selectedReportReason, setSelectedReportReason] = useState('');
@@ -244,7 +243,6 @@ export const PostCard = React.memo(({ post, currentUsername, isStatic, onOpenCon
     } finally {
       setIsVoting(false);
       setShowSlider(false);
-      setScrollLocked(false);
     }
   };
 
@@ -267,19 +265,11 @@ export const PostCard = React.memo(({ post, currentUsername, isStatic, onOpenCon
   };
 
   const handleConversationPress = () => {
-    if (onOpenConversation) {
-      onOpenConversation(post);
-    } else {
-      setIsDrawerVisible(true);
-    }
+    setIsCommentSheetVisible(true);
   };
 
   const handleBodyPress = () => {
-    if (onOpenConversation) {
-      onOpenConversation(post);
-    } else {
-      setIsDrawerVisible(true);
-    }
+    setIsFullConversationVisible(true);
   };
 
   const handleUserMenuPress = () => {
@@ -464,23 +454,14 @@ export const PostCard = React.memo(({ post, currentUsername, isStatic, onOpenCon
           settings.stance === 'regular' && { flexDirection: 'row-reverse' }
         ]}>
           {showSlider ? (
-            /* Voting mode - takes entire bottom bar */
+            /* Voting slider mode - takes entire bottom bar */
             <View style={styles.votingSliderContainer}>
-              {settings.useVoteSlider ? (
-                /* Slider mode */
-                <VotingSlider
-                  value={voteWeight}
-                  onValueChange={setVoteWeight}
-                  minimumValue={1}
-                  maximumValue={100}
-                />
-              ) : (
-                /* Preset buttons mode */
-                <VotePresetButtons
-                  onSelect={(weight) => handleVote(weight)}
-                  disabled={isVoting}
-                />
-              )}
+              <VotingSlider
+                value={voteWeight}
+                onValueChange={setVoteWeight}
+                minimumValue={1}
+                maximumValue={100}
+              />
               <View style={styles.sliderControls}>
                 <Pressable
                   style={styles.cancelVoteButton}
@@ -492,19 +473,17 @@ export const PostCard = React.memo(({ post, currentUsername, isStatic, onOpenCon
                 >
                   <FontAwesome name="times" size={22} color={theme.colors.gray} />
                 </Pressable>
-                {settings.useVoteSlider && (
-                  <Pressable
-                    style={[styles.confirmVoteButton, isVoting && styles.disabledButton]}
-                    onPress={() => handleVote(voteWeight)}
-                    disabled={isVoting}
-                  >
-                    {isVoting ? (
-                      <ActivityIndicator size="small" color={theme.colors.green} />
-                    ) : (
-                      <Ionicons name="thumbs-up" size={22} color={theme.colors.green} />
-                    )}
-                  </Pressable>
-                )}
+                <Pressable
+                  style={[styles.confirmVoteButton, isVoting && styles.disabledButton]}
+                  onPress={() => handleVote(voteWeight)}
+                  disabled={isVoting}
+                >
+                  {isVoting ? (
+                    <ActivityIndicator size="small" color={theme.colors.green} />
+                  ) : (
+                    <Ionicons name="thumbs-up" size={22} color={theme.colors.green} />
+                  )}
+                </Pressable>
               </View>
             </View>
           ) : (
@@ -555,12 +534,24 @@ export const PostCard = React.memo(({ post, currentUsername, isStatic, onOpenCon
         </View>
       </View>
 
-      {/* Unified Conversation Drawer - only show if not managed by parent */}
-      {!onOpenConversation && isDrawerVisible && (
+      {/* Comment Bottom Sheet for quick reply */}
+      <CommentBottomSheet
+        isVisible={isCommentSheetVisible}
+        onClose={() => setIsCommentSheetVisible(false)}
+        parentAuthor={post.author}
+        parentPermlink={post.permlink}
+        onReplySuccess={(reply) => {
+          // Could optionally update post children count here optimistically
+          // setPostChildrenCount(prev => prev + 1);
+        }}
+      />
+
+      {/* Conversation Drawer - Entire conversation thread */}
+      {isFullConversationVisible && (
         <React.Suspense fallback={null}>
           <ConversationDrawer
-            isVisible={isDrawerVisible}
-            onClose={() => setIsDrawerVisible(false)}
+            isVisible={isFullConversationVisible}
+            onClose={() => setIsFullConversationVisible(false)}
             post={post}
           />
         </React.Suspense>

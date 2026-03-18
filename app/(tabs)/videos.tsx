@@ -18,8 +18,6 @@ import { useAuth } from "~/lib/auth-provider";
 import { vote as hiveVote } from "~/lib/hive-utils";
 import { useToast } from "~/lib/toast-provider";
 import { useVideoFeed, type VideoPost } from "~/lib/hooks/useQueries";
-import { ConversationDrawer } from "~/components/Feed/ConversationDrawer";
-import { useScrollLock } from "~/lib/ScrollLockContext";
 import { theme } from "~/lib/theme";
 import { useAppSettings } from "~/lib/AppSettingsContext";
 
@@ -28,7 +26,6 @@ import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 const { height: WINDOW_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get("window");
 
 export default function VideosScreen() {
-  const { isScrollLocked } = useScrollLock();
   const router = useRouter();
   // Get tab bar height to calculate exact screen height for each video
   const tabBarHeight = 60; // Hardcoded fallback based on _layout.tsx
@@ -44,8 +41,6 @@ export default function VideosScreen() {
     Record<string, number>
   >({});
   const [playingStates, setPlayingStates] = useState<Record<string, boolean>>({});
-  const [selectedVideo, setSelectedVideo] = useState<VideoPost | null>(null);
-  const [isCommentsVisible, setIsCommentsVisible] = useState(false);
   const flatListRef = useRef<FlatList>(null);
 
   // Initialize liked and vote count states when videos load
@@ -147,10 +142,15 @@ export default function VideosScreen() {
   // Handle comment button - navigate to conversation
   const handleComment = useCallback(
     (video: VideoPost) => {
-      setSelectedVideo(video);
-      setIsCommentsVisible(true);
+      router.push({
+        pathname: "/conversation",
+        params: {
+          author: video.author,
+          permlink: video.permlink,
+        },
+      });
     },
-    []
+    [router]
   );
 
   // Handle share button
@@ -335,7 +335,6 @@ export default function VideosScreen() {
         <FlatList
           ref={flatListRef}
           data={videos}
-          scrollEnabled={!isScrollLocked}
           renderItem={renderVideo}
           keyExtractor={(item, index) => `${item.permlink}-${index}`}
           pagingEnabled
@@ -345,7 +344,7 @@ export default function VideosScreen() {
           decelerationRate="fast"
           onViewableItemsChanged={onViewableItemsChanged}
           viewabilityConfig={viewabilityConfig}
-          removeClippedSubviews={true} // Re-enabled to help with memory/OOM crashes
+          removeClippedSubviews={false} // Prevent jumping when items are unclipped
           maxToRenderPerBatch={3}
           windowSize={5}
           initialNumToRender={2}
@@ -365,16 +364,6 @@ export default function VideosScreen() {
           />
           <Text style={styles.emptyText}>No videos found</Text>
         </View>
-      )}
-
-      {/* Unified Comment Drawer */}
-      {selectedVideo && (
-        <ConversationDrawer
-          isVisible={isCommentsVisible}
-          onClose={() => setIsCommentsVisible(false)}
-          author={selectedVideo.author}
-          permlink={selectedVideo.permlink}
-        />
       )}
     </View>
   );

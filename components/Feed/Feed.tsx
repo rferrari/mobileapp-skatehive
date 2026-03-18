@@ -23,7 +23,6 @@ import {
 import { BadgedIcon } from "../ui/BadgedIcon";
 import { useNotificationContext } from "~/lib/notifications-context";
 import { useScrollLock } from "~/lib/ScrollLockContext";
-import { ConversationDrawer } from "./ConversationDrawer";
 import type { Discussion } from "@hiveio/dhive";
 
 interface FeedProps {
@@ -40,17 +39,6 @@ function FeedContent({ refreshTrigger, onRefresh }: FeedProps) {
   const [isRefreshing, setIsRefreshing] = React.useState(false);
   const { updateVisibleItems } = useViewportTracker();
   const { badgeCount } = useNotificationContext();
-
-  // Conversation drawer state (lifted out of PostCard)
-  const [conversationPost, setConversationPost] = React.useState<Discussion | null>(null);
-
-  const handleOpenConversation = React.useCallback((post: Discussion) => {
-    setConversationPost(post);
-  }, []);
-
-  const handleCloseConversation = React.useCallback(() => {
-    setConversationPost(null);
-  }, []);
 
   // Handle pull-to-refresh
   const handleRefresh = React.useCallback(async () => {
@@ -108,10 +96,9 @@ function FeedContent({ refreshTrigger, onRefresh }: FeedProps) {
         key={item.permlink}
         post={item}
         currentUsername={username || ""}
-        onOpenConversation={handleOpenConversation}
       />
     ),
-    [username, handleOpenConversation]
+    [username]
   );
 
   const keyExtractor = React.useCallback(
@@ -168,22 +155,15 @@ function FeedContent({ refreshTrigger, onRefresh }: FeedProps) {
         updateCellsBatchingPeriod={50}
         maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
       />
-
-      {/* Single shared conversation drawer */}
-      {conversationPost && (
-        <ConversationDrawer
-          isVisible={!!conversationPost}
-          onClose={handleCloseConversation}
-          post={conversationPost}
-        />
-      )}
     </View>
   );
 }
 
 export function Feed({ refreshTrigger, onRefresh }: FeedProps) {
   return (
-    <FeedContent refreshTrigger={refreshTrigger} onRefresh={onRefresh} />
+    <ViewportTrackerProvider>
+      <FeedContent refreshTrigger={refreshTrigger} onRefresh={onRefresh} />
+    </ViewportTrackerProvider>
   );
 }
 
